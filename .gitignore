@@ -1,0 +1,44 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+
+# Test / lint / type caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Secrets and local configuration
+credentials.json
+.env
+
+# Local sync output and scratch
+amz-library/
+**/.amz-download/
+*.log
+nohup.out
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
