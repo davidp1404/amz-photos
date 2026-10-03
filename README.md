@@ -191,5 +191,28 @@ systemctl --user enable --now amz-download.timer
 ```sh
 uv sync
 uv run pytest
-openspec validate --changes amazon-photos-sync --strict
+openspec validate --specs --strict
 ```
+
+### Build a wheel
+
+This project uses the hatchling backend with a `src/` layout, so `uv build`
+produces a pure-Python wheel:
+
+```sh
+uv build --wheel    # wheel only -> dist/amz_download-<version>-py3-none-any.whl
+uv build            # both sdist (.tar.gz) and wheel
+uv build --sdist    # sdist only
+```
+
+The wheel contains only the `amz_download` package and declares the
+`amz-download` console script, so it installs anywhere Python ≥ 3.13 runs:
+
+```sh
+uv pip install dist/amz_download-*.whl     # into the active virtualenv
+uv tool install dist/amz_download-*.whl    # or as an isolated tool
+```
+
+Bump `version` in `pyproject.toml` before a release; runtime dependencies are
+resolved by the installer from the wheel's metadata. Build output in `dist/` is
+gitignored.
