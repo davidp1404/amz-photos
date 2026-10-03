@@ -9,7 +9,7 @@ import time
 import pytest
 
 from amz_download.client import AmazonPhotosClient, RateLimiter, determine_tld
-from amz_download.errors import HashMismatchError, SessionExpiredError
+from amz_download.errors import DownloadError, HashMismatchError, SessionExpiredError
 from amz_download.models import MediaType, is_media_node, parse_album, parse_node
 from fake_amazon import FakeAmazon
 
@@ -159,6 +159,30 @@ async def test_download_hash_mismatch_raises(tmp_path):
     client = make_client(fake)
     with pytest.raises(HashMismatchError):
         await client.download("n1", tmp_path / "img.jpg", expected_md5="deadbeef")
+    await client.aclose()
+
+
+async def test_download_retries_transient_error(tmp_path):
+    fake = FakeAmazon()
+    data = b"hello" * 1000
+    fake.add_media("n1", "a.jpg", data=data)
+    fake.faults["/contentRedirection"] = 1
+    client = make_client(fake, max_retries=4)
+    target = tmp_path / "a.jpg"
+    digest = await client.download("n1", target)
+    await client.aclose()
+    assert target.read_bytes() == data
+    assert digest == hashlib.md5(data).hexdigest()
+    assert fake.path_counts["/drive/v1/nodes/n1/contentRedirection"] == 2
+
+
+async def test_download_gives_up_after_retries(tmp_path):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg", data=b"x")
+    fake.faults["/contentRedirection"] = 99
+    client = make_client(fake, max_retries=2)
+    with pytest.raises(DownloadError):
+        await client.download("n1", tmp_path / "a.jpg")
     await client.aclose()
 
 

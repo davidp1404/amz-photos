@@ -108,18 +108,3 @@ def resolve_canonical_paths(nodes: Iterable[Node]) -> dict[str, PurePosixPath]:
                 base if index == 0 else with_collision_suffix(base, node.node_id)
             )
     return result
-
-
-def canonical_absolute(root: str | object, relative: PurePosixPath | str) -> object:
-    """Join a destination root with a canonical relative path."""
-    from pathlib import Path
-
-    return Path(root) / Path(str(relative))
-
-
-def canonical_basename(relative: PurePosixPath | str) -> str:
-    return PurePosixPath(str(relative)).name
-
-
-def dated_nodes(nodes: Iterable[Node]) -> list[Node]:
-    return [n for n in nodes if n.content_date is not None]

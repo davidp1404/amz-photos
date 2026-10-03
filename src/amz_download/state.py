@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 from .models import Album, MediaType, Node, NodeStatus
 
@@ -157,10 +157,6 @@ class StateStore:
         self._conn: sqlite3.Connection | None = None
 
     # --- lifecycle -----------------------------------------------------------
-
-    @property
-    def conn(self) -> sqlite3.Connection:
-        return self._connect()
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:

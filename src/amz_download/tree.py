@@ -7,8 +7,8 @@ deterministic primary path (design D5, risks: multi/missing parents).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable, Mapping
+from dataclasses import dataclass
+from typing import Iterable
 
 from .models import Folder, Node
 from .paths import short_id

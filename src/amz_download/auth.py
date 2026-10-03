@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,8 +30,6 @@ REQUIRED_FAMILIES: tuple[tuple[str, str, str], ...] = (
     ("ubid", UBID_DEFAULT, UBID_PREFIX),
     (SESSION_COOKIE, SESSION_COOKIE, SESSION_COOKIE),
 )
-
-_REGIONAL_RE = re.compile(r"^[a-z0-9]+-[a-z0-9]+$")
 
 
 def _family_present(cookies: Mapping[str, Any], default: str, prefix: str) -> bool:

@@ -1,10 +1,10 @@
-# Spec Delta
+# amazon-photos-auth Specification
 
 ## Purpose
 
 Acquire, store, and validate an Amazon Photos web session so that synchronization can run unattended and fail clearly when the session is no longer usable.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Supply session from a cookie file
 
@@ -74,6 +74,20 @@ The synchronization command SHALL NOT prompt for input; interactive authenticati
 
 - **WHEN** synchronization runs with no stored session
 - **THEN** the system fails with an instruction to authenticate first and does not prompt for credentials
+
+### Requirement: Session validity can be checked in one request
+
+The system SHALL provide a non-interactive way to check the stored session with a single request, distinct from synchronization, reporting success or a re-authentication failure without modifying the library.
+
+#### Scenario: Validity check succeeds
+
+- **WHEN** a valid stored session exists and a check is requested
+- **THEN** the system reports the session valid and exits successfully with no library changes
+
+#### Scenario: Validity check reports rejection
+
+- **WHEN** the stored session is missing or rejected by Amazon Photos
+- **THEN** the system reports that re-authentication is required and exits non-zero without prompting
 
 ### Requirement: Secrets kept out of output
 

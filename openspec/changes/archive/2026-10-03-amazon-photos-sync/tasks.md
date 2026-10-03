@@ -14,11 +14,12 @@
 - [x] 2.4 Implement session validation and the expiry error path used by sync. Verify a unit test where a rejected session produces a non-zero, re-authentication error and performs no library writes.
 - [x] 2.5 Guarantee secrets never appear in output. Verify a unit test scans captured logs and messages for cookie values across success and failure paths.
 - [x] 2.6 Document authentication (cookie file, regional names, and Firefox extraction) in `README.md`. Verify the documented commands run as written.
+- [x] 2.7 Add a non-interactive session-check command that validates the stored session with one request and reports a distinct exit status for rejection. Verify tests cover valid, missing, and rejected sessions. [Post-verification addition: `amz-download check` in `cli.py`; covered by `tests/test_cli.py`.]
 
 ## 3. Amazon web API client
 
 - [x] 3.1 Define the media/node and album models and parsing. Verify unit tests parse representative payloads, including correct exclusion of non-media nodes.
-- [x] 3.2 Implement the search listing calls with pagination for media nodes and folder nodes (`kind:FOLDER`). Verify a test with a mocked transport returns all pages for both node kinds and stops at the end of the library.
+- [x] 3.2 Implement the search listing calls with pagination for media nodes and folder nodes (`kind:FOLDER`). Verify a test with a mocked transport returns all pages for both node kinds and stops at the end of the library. [Live API correction: `/search` rejects `kind` (400 `Invalid fieldName: kind`), so folders are listed by traversing `/nodes/{id}/children?filters=kind:FOLDER`. See `spike-findings.md`.]
 - [x] 3.3 Implement album listing and album-membership calls. Verify tests with a mocked transport return every album and its member node identifiers, paginating where the endpoint does.
 - [x] 3.4 Implement streaming content download. Verify a test streams bytes to a file and independently computes the expected md5.
 - [x] 3.5 Implement concurrency limiting, retry with backoff, and rate limiting for listing and downloads. Verify tests confirm transient errors are retried and in-flight requests never exceed the configured cap.
@@ -54,7 +55,7 @@
 
 - [x] 7.1 Wire the `login`, `sync`, `views`, `status`, and `repair` subcommands with options for destination, dry-run, concurrency, and item limits. Verify `--help` works for each subcommand.
 - [x] 7.2 Implement non-interactive sync and the exit-code contract. Verify a test with no stored session returns non-zero with a re-authenticate instruction and does not prompt.
-- [x] 7.3 Implement progress and end-of-run summary output. Verify a mocked run prints counts for downloaded, skipped, moved, archived, and failed items.
+- [x] 7.3 Implement progress and end-of-run summary output. Verify a mocked run prints counts for downloaded, skipped, moved, archived, and failed items. [Summary also reports `refreshed`, `healed`, `deferred` (items skipped by `--limit`), and `bytes`.]
 - [x] 7.4 Implement status reporting from recorded state only. Verify a test asserts reported counts match recorded state and that no network request is made.
 
 ## 8. Integration and documentation

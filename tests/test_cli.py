@@ -13,7 +13,6 @@ from amz_download import auth, cli
 from amz_download.client import AmazonPhotosClient
 from amz_download.models import MediaType, Node, NodeStatus
 from amz_download.state import NodeRecord, StateStore, default_state_path
-from amz_download.sync import SyncSummary
 from fake_amazon import FakeAmazon
 
 COOKIES = {"at_main": "a", "ubid_main": "u", "session-id": "s"}

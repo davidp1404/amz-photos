@@ -1,10 +1,10 @@
-# Spec Delta
+# amazon-photos-sync Specification
 
 ## Purpose
 
 Keep a local media library incrementally synchronized with an Amazon Photos account, downloading only what is new or changed and never destroying local copies.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Enumerate remote media
 
@@ -31,7 +31,7 @@ The system SHALL track each local file by its Amazon node identifier rather than
 
 #### Scenario: Moved media is relocated locally
 
-- **WHEN** a previously synced node appears at a different remote tree path with the same identifier and unchanged content
+- **WHEN** a previously synced node's canonical path changes (for example it is renamed) while its identifier and content are unchanged
 - **THEN** the system moves the existing local file to the new canonical location without downloading it again
 
 ### Requirement: Reconcile remote and local state

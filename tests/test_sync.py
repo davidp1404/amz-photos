@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from amz_download.client import AmazonPhotosClient
-from amz_download.models import Album, MediaType, Node, NodeStatus
+from amz_download.models import MediaType, Node, NodeStatus
 from amz_download.state import NodeRecord, StateStore
 from amz_download.sync import (
     ActionType,

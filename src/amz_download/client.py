@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import random
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterable, Mapping
+from typing import Any, Mapping
 
 import httpx
 
@@ -52,6 +51,14 @@ def determine_tld(cookies: Mapping[str, Any]) -> str:
         if name.startswith("at-acb"):
             return name[len("at-acb") :]
     return DEFAULT_TLD
+
+
+class _RetryableStatus(Exception):
+    """Internal marker for a retryable HTTP status during a streamed download."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"retryable status {status}")
+        self.status = status
 
 
 class RateLimiter:
@@ -318,36 +325,62 @@ class AmazonPhotosClient:
     ) -> str:
         """Stream a node's content to ``destination`` and return its md5.
 
-        The caller chooses the destination (normally a temporary path) and is
-        responsible for atomic finalisation. Raises :class:`HashMismatchError`
-        when ``expected_md5`` is given and does not match.
+        Transient network/server errors are retried with backoff before the
+        item is reported failed. The caller chooses the destination (normally a
+        temporary path) and is responsible for atomic finalisation. Raises
+        :class:`HashMismatchError` when ``expected_md5`` is given and mismatches.
         """
         owner_id = await self.get_owner_id()
         url = f"{self.base_url}/nodes/{node_id}/contentRedirection"
         params = {"download": "true", "ownerId": owner_id}
         target = Path(destination)
         digest = hashlib.md5()
-        await self._limiter.acquire()
-        try:
-            async with self._semaphore:
-                async with self._client.stream("GET", url, params=params) as response:
-                    if response.status_code == 401:
-                        raise SessionExpiredError(
-                            "Amazon rejected the stored session during download; "
-                            "re-authenticate with `amz-download login`."
-                        )
-                    if response.status_code >= 400:
-                        raise DownloadError(
-                            f"download of {node_id} failed with status "
-                            f"{response.status_code}"
-                        )
-                    with open(target, "wb") as handle:
-                        async for chunk in response.aiter_bytes(chunk_size):
-                            if chunk:
-                                handle.write(chunk)
-                                digest.update(chunk)
-        except httpx.HTTPError as exc:
-            raise DownloadError(f"download of {node_id} failed: {exc}") from exc
+        attempt = 0
+        while True:
+            attempt += 1
+            digest = hashlib.md5()
+            await self._limiter.acquire()
+            try:
+                async with self._semaphore:
+                    async with self._client.stream(
+                        "GET", url, params=params
+                    ) as response:
+                        if response.status_code == 401:
+                            raise SessionExpiredError(
+                                "Amazon rejected the stored session during "
+                                "download; re-authenticate with "
+                                "`amz-download login`."
+                            )
+                        if response.status_code in RETRYABLE_STATUS:
+                            raise _RetryableStatus(response.status_code)
+                        if response.status_code >= 400:
+                            raise DownloadError(
+                                f"download of {node_id} failed with status "
+                                f"{response.status_code}"
+                            )
+                        with open(target, "wb") as handle:
+                            async for chunk in response.aiter_bytes(chunk_size):
+                                if chunk:
+                                    handle.write(chunk)
+                                    digest.update(chunk)
+                break
+            except SessionExpiredError:
+                raise
+            except (
+                httpx.TransportError,
+                httpx.TimeoutException,
+                _RetryableStatus,
+            ) as exc:
+                if attempt > self.max_retries:
+                    raise DownloadError(
+                        f"download of {node_id} failed after {attempt - 1} "
+                        f"retries: {exc}"
+                    ) from exc
+                await self._sleep_backoff(attempt)
+                continue
+            except httpx.HTTPError as exc:
+                raise DownloadError(f"download of {node_id} failed: {exc}") from exc
+
         computed = digest.hexdigest()
         if expected_md5 and computed.lower() != expected_md5.lower():
             raise HashMismatchError(
@@ -355,8 +388,3 @@ class AmazonPhotosClient:
                 f"got {computed}"
             )
         return computed
-
-
-async def stream_iter(response: httpx.Response) -> AsyncIterator[bytes]:
-    async for chunk in response.aiter_bytes():
-        yield chunk

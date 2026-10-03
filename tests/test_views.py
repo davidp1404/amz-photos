@@ -120,3 +120,18 @@ def test_symlink_failure_degrades_gracefully(tmp_path, monkeypatch):
     # Canonical media is untouched.
     assert target.read_bytes() == b"canonical-bytes"
     store.close()
+
+
+def test_on_demand_regeneration_is_idempotent(tmp_path):
+    """Regenerating without a sync changes nothing (layout spec scenario)."""
+    dest = tmp_path / "lib"
+    store = make_store(tmp_path)
+    add_media(store, dest)
+    first = generate_views(store, dest)
+    second = generate_views(store, dest)
+    assert first.created >= 1
+    assert second.created == 0
+    assert second.updated == 0
+    assert second.removed == 0
+    assert second.links == first.links
+    store.close()
