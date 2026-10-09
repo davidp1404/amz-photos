@@ -1,6 +1,6 @@
 [project]
 name = "amz-download"
-version = "0.1.0"
+dynamic = ["version"]
 description = "One-way incremental backup from Amazon Photos to a local library"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -16,6 +16,9 @@ amz-download = "amz_download.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/amz_download/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amz_download"]

@@ -246,6 +246,36 @@ uv pip install dist/amz_download-*.whl     # into the active virtualenv
 uv tool install dist/amz_download-*.whl    # or as an isolated tool
 ```
 
-Bump `version` in `pyproject.toml` before a release; runtime dependencies are
-resolved by the installer from the wheel's metadata. Build output in `dist/` is
-gitignored.
+### Releasing: bumping the version
+
+The version has a **single source of truth**: the `__version__` constant in
+`src/amz_download/__init__.py`. `pyproject.toml` does not hold a literal
+version; hatchling reads it from that file at build time
+(`[tool.hatch.version]`), so the packaging metadata and `amz-download version`
+can never disagree.
+
+To cut a release:
+
+1. Edit the one line in `src/amz_download/__init__.py`:
+
+   ```python
+   __version__ = "0.1.2"
+   ```
+
+   Follow [semantic versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
+
+2. Rebuild the wheel (the version is baked into the artifact and its filename):
+
+   ```sh
+   uv build
+   ```
+
+3. Verify both the artifact and the runtime report the new version:
+
+   ```sh
+   ls dist/amz_download-*.whl     # -> dist/amz_download-0.1.2-py3-none-any.whl
+   uv run amz-download version    # -> 0.1.2
+   ```
+
+Do not edit the version in `pyproject.toml`; there is nothing to edit there.
+Build output in `dist/` is gitignored, so delete stale wheels before publishing.
