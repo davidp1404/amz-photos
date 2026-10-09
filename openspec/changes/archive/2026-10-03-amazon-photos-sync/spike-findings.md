@@ -6,14 +6,15 @@ Design gate: D10 (`design.md`).
 ## Status
 
 **LIVE EXECUTION PERFORMED on 2026-10-03** against a real Amazon Photos account
-on **amazon.es** (the `.com` domain returns `403 Account Not Found`; the TLD is
-derived correctly from the regional cookie names `at-acbes` / `ubid-acbes`).
+on a regional Amazon domain (the `.com` domain returns `403 Account Not Found`;
+the TLD is derived correctly from the regional cookie names, e.g. `at-<cc>` /
+`ubid-<cc>`).
 
-Session: captured from a local Firefox profile via `amz-download login --firefox`.
-Endpoints below were confirmed with a full live listing (17,494 media items) and
-a small real download. Session **lifetime is still being measured** (see below).
+Session: captured from a Firefox profile via `amz-download login --firefox`.
+Endpoints below were confirmed with a full live listing and a small download.
+Session **lifetime is still being measured** (see below).
 
-## Live results (2026-10-03, amazon.es)
+## Live results (2026-10-03)
 
 Shared query parameters: `asset=ALL`, `tempLink=false`, `resourceVersion=V2`,
 `ContentType=JSON`.
@@ -22,11 +23,11 @@ Shared query parameters: `asset=ALL`, `tempLink=false`, `resourceVersion=V2`,
 | --- | --- | --- |
 | Session probe | `GET /account/usage` | ✅ 200 |
 | Root / owner id | `GET /nodes?filters=isRoot:true` | ✅ 200 |
-| Media listing | `GET /search?filters=type:(PHOTOS OR VIDEOS)&limit=200&offset=N&searchContext=customer&lowResThumbnail=true&sort=['createdDate DESC']` → `{count,data[]}` | ✅ 200; 17,494 media nodes paginated to the end |
+| Media listing | `GET /search?filters=type:(PHOTOS OR VIDEOS)&limit=200&offset=N&searchContext=customer&lowResThumbnail=true&sort=['createdDate DESC']` → `{count,data[]}` | ✅ 200; full library paginated to the end |
 | Folder listing | `GET /nodes/{id}/children?filters=kind:FOLDER` traversed from the root | ✅ 200 (see correction below) |
-| Album listing | `GET /nodes?filters=kind:VISUAL_COLLECTION` | ✅ 200; 8 albums |
+| Album listing | `GET /nodes?filters=kind:VISUAL_COLLECTION` | ✅ 200 |
 | Album membership | `GET /nodes/{album_id}/children?limit=200&offset=N` | ✅ 200 |
-| Content download | `GET /nodes/{node_id}/contentRedirection?download=true&ownerId={ownerId}` (streaming, md5 verified) | ✅ 200; 3 files, 755,153 bytes, hashes matched |
+| Content download | `GET /nodes/{node_id}/contentRedirection?download=true&ownerId={ownerId}` (streaming, md5 verified) | ✅ 200; sample files downloaded, md5 hashes matched |
 
 ## Corrections vs. the reference implementation
 
