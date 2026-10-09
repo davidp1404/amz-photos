@@ -15,7 +15,12 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from .errors import MissingCookieError, NoCookiesFoundError, SessionExpiredError
+from .errors import (
+    CookieReadError,
+    MissingCookieError,
+    NoCookiesFoundError,
+    SessionExpiredError,
+)
 
 # Cookie families. ``at`` and ``ubid`` have a default name and per-TLD regional
 # variants (e.g. ``at-acbde`` / ``ubid-acbde``).
@@ -115,7 +120,21 @@ def _parse_json_cookies(text: str) -> dict[str, str]:
 
 
 def read_cookie_file(path: str | os.PathLike[str]) -> dict[str, str]:
-    return parse_cookie_file(Path(path).read_text(encoding="utf-8"))
+    """Read a cookie file, reporting unreadable or unparseable files by name.
+
+    Raises :class:`CookieReadError` when the file cannot be read (missing,
+    unreadable, not text) or its contents cannot be parsed. The message names
+    the file and the reason, never a cookie value.
+    """
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:  # ValueError: binary file, undecodable
+        raise CookieReadError(f"cannot read cookie file {target}: {exc}") from exc
+    try:
+        return parse_cookie_file(text)
+    except ValueError as exc:  # e.g. json.JSONDecodeError
+        raise CookieReadError(f"cannot parse cookie file {target}: {exc}") from exc
 
 
 def firefox_profile_roots() -> list[Path]:
@@ -261,6 +280,7 @@ async def ensure_session(client: Any) -> None:
 
 
 __all__ = [
+    "CookieReadError",
     "MissingCookieError",
     "NoCookiesFoundError",
     "SessionExpiredError",

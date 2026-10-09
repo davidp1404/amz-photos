@@ -44,7 +44,8 @@ amz-download login --cookie-file ~/cookies.txt
 ```
 
 A cookie file missing a required cookie is rejected by name, and no cookie value
-is ever printed.
+is ever printed. A file that cannot be read or parsed is reported by path and
+exits 2, not as a traceback.
 
 ### From Firefox
 
@@ -103,6 +104,38 @@ amz-download repair --dest /data/photos
 
 `sync` exits `0` on success, `1` when some items failed (the rest are still
 processed), and `2` when authentication is required.
+
+## Verbosity
+
+Every command takes a repeatable `-v` / `--verbose` flag. Without it nothing
+changes: warnings still appear and nothing else is printed. The flag belongs to
+the subcommand, so it goes after it (`amz-download sync -v`, not
+`amz-download -v sync`).
+
+- `-v` narrates the run: the destination and session file in use, each listing as
+  it is fetched, the reconciliation against recorded state, and one line per node
+  naming the action, the node id, the canonical path, and the reason.
+- `-vv` adds request detail: every request's method, URL, parameters, and
+  response status, each pagination window, retries with the delay before the
+  next attempt, and the byte count and content hash of each transfer.
+
+```sh
+amz-download sync -v --dest /data/photos
+amz-download sync -vv --dest /data/photos
+```
+
+Diagnostics go to standard error and results to standard output, so the summary,
+the `status` report, and the dry-run output stay exactly as they are and can be
+captured on their own:
+
+```sh
+amz-download sync -v 2>/var/log/amz-download.diag >/var/log/amz-download.out
+```
+
+Cookie and session values never appear in diagnostics, at any level. See
+`openspec/changes/add-verbose-logging` for the behavior this implements and
+`tests/test_log.py` and `tests/test_client.py` for the tests that hold it in
+place.
 
 ## Layout
 

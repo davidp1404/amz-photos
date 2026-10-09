@@ -117,3 +117,41 @@ def test_end_to_end(tmp_path, environment):
     noop = runner.invoke(cli.app, ["sync", "--dest", str(dest)])
     assert noop.exit_code == 0, noop.output
     assert content_requests(fake) == requests_before_noop
+
+
+def test_verbose_narrates_a_run_in_order(tmp_path, environment, monkeypatch):
+    """The narrative arrives while the run is going, in the order the work happens."""
+    fake, creds, dest, output = environment
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text(COOKIE_FILE)
+    login = runner.invoke(cli.app, ["login", "--cookie-file", str(cookie_file)])
+    assert login.exit_code == 0, login.output
+
+    # Without the flag there is nothing but the summary, on stdout.
+    quiet = runner.invoke(cli.app, ["sync", "--dest", str(dest / "quiet")])
+    assert quiet.exit_code == 0, quiet.output
+    assert quiet.stderr == ""
+    assert "Sync summary" in output.getvalue()
+    output.truncate(0)
+    output.seek(0)
+
+    loud = runner.invoke(cli.app, ["sync", "-v", "--dest", str(dest / "loud")])
+    assert loud.exit_code == 0, loud.output
+
+    lines = loud.stderr
+    order = [
+        "syncing into",
+        "listing media",
+        "listing folders",
+        "listing albums",
+        "listing members of album al1",
+        "reconciling 2 remote nodes against 0 recorded",
+        "planned download=2",
+        "download n1 -> 2023/08/2023-08-14_one.jpg (new)",
+        "download n2 -> 2023/08/2023-08-14_two.jpg (new)",
+    ]
+    positions = [lines.index(marker) for marker in order]
+    assert positions == sorted(positions)
+    # The summary is a result, not a diagnostic.
+    assert "Sync summary" not in lines
+    assert "Sync summary" in output.getvalue()

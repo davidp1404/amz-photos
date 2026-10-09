@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+
+from amz_download import log
 from amz_download.models import Album, MediaType, Node, NodeStatus
 from amz_download.state import NodeRecord, StateStore
 from amz_download.views import BY_ALBUM_DIR, BY_TREE_DIR, generate_views
@@ -134,4 +136,44 @@ def test_on_demand_regeneration_is_idempotent(tmp_path):
     assert second.updated == 0
     assert second.removed == 0
     assert second.links == first.links
+    store.close()
+
+
+# --- diagnostics (verbosity) -------------------------------------------------
+
+
+def test_link_changes_logged_at_debug(debug_logging, caplog, tmp_path):
+    store = make_store(tmp_path)
+    dest = tmp_path / "lib"
+    add_media(store, dest, node_id="n1", canonical="2023/08/2023-08-14_one.jpg")
+    add_media(store, dest, node_id="n2", canonical="2023/08/2023-08-14_two.jpg")
+
+    first = generate_views(store, dest)
+    assert first.created >= 1
+    created = [line for line in caplog.text.splitlines() if "created link" in line]
+    assert len(created) == first.created
+
+    caplog.clear()
+
+    # Archiving one node makes its link stale, so regeneration prunes it and
+    # leaves the surviving link alone.
+    store.mark_archived("n2")
+    second = generate_views(store, dest)
+    assert second.created == 0
+    assert second.removed >= 1
+    assert "removed link" in caplog.text
+    assert "unchanged link" in caplog.text
+    store.close()
+
+
+def test_link_changes_not_logged_at_info(caplog, tmp_path):
+    log.configure(1)
+    store = make_store(tmp_path)
+    dest = tmp_path / "lib"
+    add_media(store, dest)
+
+    result = generate_views(store, dest)
+    assert result.created >= 1
+    assert "created link" not in caplog.text
+    log.configure(0)
     store.close()

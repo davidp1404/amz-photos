@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any, Mapping
@@ -26,6 +27,8 @@ from .models import (
     parse_folder,
     parse_node,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TLD = "com"
 DEFAULT_PAGE_SIZE = 200
@@ -147,6 +150,9 @@ class AmazonPhotosClient:
         while True:
             attempt += 1
             await self._limiter.acquire()
+            logger.debug(
+                "GET %s attempt %s params=%s", url, attempt, dict(params or {})
+            )
             try:
                 async with self._semaphore:
                     response = await self._client.request(method, url, params=params)
@@ -156,9 +162,11 @@ class AmazonPhotosClient:
                     raise AmzError(
                         f"Amazon request failed after retries: {exc}"
                     ) from exc
+                self._log_retry(url, attempt, f"transport error: {exc}")
                 await self._sleep_backoff(attempt)
                 continue
 
+            logger.debug("GET %s -> %s", url, response.status_code)
             if response.status_code == 401:
                 raise SessionExpiredError(
                     "Amazon rejected the stored session; re-authenticate with "
@@ -170,6 +178,7 @@ class AmazonPhotosClient:
                 )
                 if attempt > self.max_retries:
                     raise last_error
+                self._log_retry(url, attempt, f"status {response.status_code}")
                 await self._sleep_backoff(attempt)
                 continue
             if response.status_code >= 400:
@@ -181,16 +190,33 @@ class AmazonPhotosClient:
         # pragma: no cover - loop always returns or raises
         raise last_error if last_error else AmzError("unreachable")
 
+    def _backoff_delay(self, attempt: int) -> float:
+        return min(self.backoff_base**attempt, self.backoff_cap)
+
+    def _log_retry(self, url: str, attempt: int, reason: str) -> None:
+        logger.info(
+            "retrying %s in %.2fs (attempt %s of %s): %s",
+            url,
+            self._backoff_delay(attempt),
+            attempt + 1,
+            self.max_retries + 1,
+            reason,
+        )
+
     async def _sleep_backoff(self, attempt: int) -> None:
-        delay = min(self.backoff_base**attempt, self.backoff_cap)
+        delay = self._backoff_delay(attempt)
         if delay <= 0:
             return
         await asyncio.sleep(delay)
 
+    def _url(self, path: str) -> str:
+        """The absolute endpoint path for a client-relative one."""
+        return f"{self.base_url}{path}"
+
     async def _get_json(
         self, path: str, *, params: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
-        response = await self._request("GET", f"{self.base_url}{path}", params=params)
+        response = await self._request("GET", self._url(path), params=params)
         return response.json()
 
     # --- session -------------------------------------------------------------
@@ -237,6 +263,13 @@ class AmazonPhotosClient:
             results.extend(items)
             if total is None:
                 total = int(data.get("count") or len(items))
+            logger.debug(
+                "page of %s: offset=%s items=%s total=%s",
+                self._url(path),
+                offset,
+                len(items),
+                total,
+            )
             offset += len(items)
             if not items or offset >= total:
                 break
@@ -244,6 +277,7 @@ class AmazonPhotosClient:
 
     async def list_media(self) -> list[Node]:
         """List every photo and video node, paginating to the end."""
+        logger.info("listing media")
         payloads = await self._paginate(
             "/search",
             params={**self._base_params(), **SEARCH_EXTRA, "filters": MEDIA_FILTER},
@@ -264,6 +298,7 @@ class AmazonPhotosClient:
         (``Invalid fieldName: kind``), so folders are discovered from the root
         down, as in the reference implementation.
         """
+        logger.info("listing folders")
         root = await self._get_root()
         root_id = str(root.get("id") or "")
         if not root_id:
@@ -287,6 +322,7 @@ class AmazonPhotosClient:
 
     async def list_albums(self) -> list[Album]:
         """List every album (``VISUAL_COLLECTION`` node)."""
+        logger.info("listing albums")
         payloads = await self._paginate(
             "/nodes", params={**self._base_params(), "filters": ALBUM_FILTER}
         )
@@ -301,6 +337,7 @@ class AmazonPhotosClient:
 
     async def album_members(self, album_id: str) -> list[str]:
         """Return the media node ids belonging to an album."""
+        logger.info("listing members of album %s", album_id)
         payloads = await self._paginate(
             f"/nodes/{album_id}/children", params=self._base_params()
         )
@@ -331,9 +368,10 @@ class AmazonPhotosClient:
         :class:`HashMismatchError` when ``expected_md5`` is given and mismatches.
         """
         owner_id = await self.get_owner_id()
-        url = f"{self.base_url}/nodes/{node_id}/contentRedirection"
+        url = self._url(f"/nodes/{node_id}/contentRedirection")
         params = {"download": "true", "ownerId": owner_id}
         target = Path(destination)
+        logger.info("downloading %s -> %s", node_id, target)
         digest = hashlib.md5()
         attempt = 0
         while True:
@@ -382,6 +420,12 @@ class AmazonPhotosClient:
                 raise DownloadError(f"download of {node_id} failed: {exc}") from exc
 
         computed = digest.hexdigest()
+        logger.debug(
+            "downloaded %s: %d bytes md5=%s",
+            node_id,
+            target.stat().st_size if target.exists() else 0,
+            computed,
+        )
         if expected_md5 and computed.lower() != expected_md5.lower():
             raise HashMismatchError(
                 f"content hash mismatch for {node_id}: expected {expected_md5}, "

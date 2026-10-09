@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+
+from amz_download import log
 from amz_download.models import Album, MediaType, Node, NodeStatus
 from amz_download.state import (
     SCHEMA_VERSION,
@@ -172,3 +174,22 @@ def test_archive_and_reappear_transitions(tmp_path):
 
 def test_default_state_path(tmp_path):
     assert default_state_path(tmp_path) == tmp_path / ".amz-download" / "state.sqlite"
+
+
+# --- diagnostics (verbosity) -------------------------------------------------
+
+
+def test_node_upsert_logged_at_debug(debug_logging, caplog, tmp_path):
+    store = make_store(tmp_path)
+    store.upsert_node(make_record())
+    store.close()
+    assert "upserting node n1 at 2023/08/x_beach.jpg" in caplog.text
+
+
+def test_node_upsert_not_logged_at_info(caplog, tmp_path):
+    log.configure(1)
+    store = make_store(tmp_path)
+    store.upsert_node(make_record())
+    store.close()
+    log.configure(0)
+    assert "upserting" not in caplog.text

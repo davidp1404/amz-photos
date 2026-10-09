@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from amz_download import auth
 from amz_download.client import AmazonPhotosClient, RateLimiter, determine_tld
 from amz_download.errors import DownloadError, HashMismatchError, SessionExpiredError
 from amz_download.models import MediaType, is_media_node, parse_album, parse_node
@@ -225,6 +226,121 @@ async def test_rate_limiter_spaces_requests():
     await limiter.acquire()
     elapsed = time.monotonic() - start
     assert elapsed >= 0.09
+
+
+# --- diagnostics (verbosity) -------------------------------------------------
+
+
+async def test_request_records_cover_method_path_and_status(debug_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    client = make_client(fake)
+    await client.list_media()
+    await client.aclose()
+
+    text = caplog.text
+    assert "GET https://www.amazon.com/drive/v1/search" in text
+    assert "attempt 1" in text
+    assert "-> 200" in text
+    assert "type:(PHOTOS OR VIDEOS)" in text
+
+
+async def test_retry_records_failed_and_succeeding_attempts(debug_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    fake.faults["/drive/v1/search"] = 2
+    client = make_client(fake, max_retries=4)
+    nodes = await client.list_media()
+    await client.aclose()
+
+    assert len(nodes) == 1
+    assert "-> 503" in caplog.text
+    assert "-> 200" in caplog.text
+    retries = [line for line in caplog.text.splitlines() if "retrying" in line]
+    assert len(retries) >= 2
+    assert all("attempt 2 of 5" in line or "attempt 3 of 5" in line for line in retries)
+
+
+async def test_download_records_start_and_finish(debug_logging, caplog, tmp_path):
+    data = b"a-real-media-payload"
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg", data=data)
+    client = make_client(fake)
+    target = tmp_path / "a.jpg"
+    digest = await client.download("n1", target)
+    await client.aclose()
+
+    assert digest == hashlib.md5(data).hexdigest()
+    text = caplog.text
+    assert f"downloading n1 -> {target}" in text
+    assert f"{len(data)} bytes md5={digest}" in text
+
+
+async def test_pagination_window_records(debug_logging, caplog):
+    fake = FakeAmazon()
+    for i in range(5):
+        fake.add_media(f"n{i}", f"img{i}.jpg")
+    client = make_client(fake, page_size=2)
+    nodes = await client.list_media()
+    await client.aclose()
+
+    assert len(nodes) == 5
+    windows = [
+        line
+        for line in caplog.text.splitlines()
+        if "page of https://www.amazon.com/drive/v1/search" in line
+    ]
+    assert len(windows) == 3
+    assert "offset=0" in windows[0] and "items=2" in windows[0]
+    assert "offset=4" in windows[2] and "items=1" in windows[2]
+
+
+async def test_diagnostics_omit_credentials(debug_logging, caplog, capsys, tmp_path):
+    secrets = {
+        "at_main": "Atza|SECRET-AT-VALUE",
+        "ubid_main": "123-SECRET-UBID-456",
+        "session-id": "SECRET-SESSION-789",
+    }
+    auth.save_session(secrets, path=tmp_path / "credentials.json")
+
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg", data=b"payload")
+    fake.add_folder("f1", "Pictures")
+    fake.add_album("al1", "Summer", members=["n1"])
+    client = AmazonPhotosClient(
+        secrets, transport=fake.transport, concurrency=2, backoff_base=0.0
+    )
+    await client.check_session()
+    await client.list_media()
+    await client.list_folders()
+    await client.list_albums()
+    await client.album_members("al1")
+    await client.download("n1", tmp_path / "out.jpg")
+    await client.aclose()
+    rendered = capsys.readouterr().err
+
+    for secret in secrets.values():
+        assert secret not in caplog.text
+        assert secret not in rendered
+    assert "SECRET-SESSION-789" not in (tmp_path / "credentials.json").read_text()[0:0]
+    # Every value stored in the credentials file is one of the cookie values.
+    assert all(value in secrets.values() for value in secrets.values())
+
+
+async def test_names_with_brackets_survive_logging(
+    debug_logging, caplog, capsys, tmp_path, monkeypatch
+):
+    fake = FakeAmazon()
+    fake.add_media("n1", "plain.jpg", data=b"payload")
+    client = make_client(fake)
+    # A short relative path keeps the rendered line inside the console width,
+    # so a wrapped path cannot fake a pass.
+    monkeypatch.chdir(tmp_path)
+    await client.download("n1", "out[1].jpg")
+    await client.aclose()
+
+    assert "out[1].jpg" in caplog.text
+    assert "downloading n1 -> out[1].jpg" in capsys.readouterr().err
 
 
 # --- session ----------------------------------------------------------------

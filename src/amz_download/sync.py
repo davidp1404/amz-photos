@@ -2,14 +2,16 @@
 
 Three-way reconciliation of remote nodes, recorded state, and the local
 filesystem produces exactly one action per node: download, refresh, skip, heal,
-move, or archive. Execution is failure-isolated, resumable (through recorded
-state), and non-destructive: a remote deletion archives locally rather than
-deleting.
+move, or archive. Execution is failure-isolated, concurrent within the
+requested bound, resumable (through recorded state), and non-destructive: a
+remote deletion archives locally rather than deleting.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +26,8 @@ from .paths import resolve_canonical_paths
 from .state import NodeRecord, StateStore, now_iso
 from .tree import RemoteEntry, build_remote_tree
 from .views import ViewResult, generate_views
+
+logger = logging.getLogger(__name__)
 
 
 class ActionType(str, Enum):
@@ -239,17 +243,36 @@ async def execute_plan(
     dry_run: bool = False,
     limit: int | None = None,
     warn: Callable[[str], None] | None = None,
+    concurrency: int | None = None,
 ) -> SyncSummary:
+    """Apply every action in the plan, several at a time, isolating failures.
+
+    Actions run on a fixed pool of ``concurrency`` workers (the client's own
+    cap by default, so one setting bounds both the requests in flight and the
+    actions being applied). The ``limit`` budget is spent in plan order before
+    anything runs, so a bounded transfer run picks the same items every time.
+    A failing action records its failure and leaves the rest of the run alone.
+    """
     dest = Path(dest)
     summary = SyncSummary(dry_run=dry_run)
-    content_done = 0
+    workers = concurrency if concurrency is not None else client.concurrency
+    if workers < 1:
+        raise ValueError("concurrency must be >= 1")
 
+    runnable: list[Action] = []
+    transfers_left = limit
     for action in plan:
         if action.type in CONTENT_ACTIONS:
-            if limit is not None and content_done >= limit:
-                summary.deferred += 1
-                continue
-            content_done += 1
+            if transfers_left is not None:
+                if transfers_left <= 0:
+                    summary.deferred += 1
+                    continue
+                transfers_left -= 1
+        runnable.append(action)
+
+    logger.debug("executing %d actions on %d workers", len(runnable), workers)
+
+    async def run(action: Action) -> None:
         try:
             await _apply_action(
                 action,
@@ -269,6 +292,23 @@ async def execute_plan(
             if not dry_run:
                 store.record_failure(action.node_id, str(exc), run_id)
             _discard_partial(dest / action.canonical_path)
+
+    queue: asyncio.Queue[Action] = asyncio.Queue()
+    for action in runnable:
+        queue.put_nowait(action)
+
+    async def worker() -> None:
+        """Drain queued actions in plan order until none are left."""
+        while True:
+            try:
+                action = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            await run(action)
+
+    async with asyncio.TaskGroup() as group:
+        for _ in range(workers):
+            group.create_task(worker())
     return summary
 
 
@@ -283,6 +323,13 @@ async def _apply_action(
     summary: SyncSummary,
 ) -> None:
     target = dest / action.canonical_path
+    logger.info(
+        "%s %s -> %s (%s)",
+        action.type.value,
+        action.node_id,
+        action.canonical_path,
+        action.reason or "planned",
+    )
 
     if action.type in CONTENT_ACTIONS:
         if dry_run:
@@ -372,6 +419,14 @@ def _count_content(summary: SyncSummary, action_type: ActionType) -> None:
         summary.healed += 1
 
 
+def _plan_summary(plan: list[Action]) -> str:
+    """A stable one-line description of a plan, e.g. ``download=2 skip=1``."""
+    counts: dict[str, int] = {}
+    for action in plan:
+        counts[action.type.value] = counts.get(action.type.value, 0) + 1
+    return ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+
+
 def _discard_partial(target: Path) -> None:
     partial = target.with_name(target.name + ".part")
     if partial.exists():
@@ -423,7 +478,13 @@ async def sync(
                 album.album_id, memberships.get(album.album_id, [])
             )
 
+    logger.info(
+        "reconciling %d remote nodes against %d recorded",
+        len(media),
+        len(recorded),
+    )
     plan = reconcile(media, remote_tree, canonical, recorded, dest)
+    logger.info("planned %s", _plan_summary(plan))
     summary = await execute_plan(
         plan,
         client=client,

@@ -24,6 +24,10 @@ class NoCookiesFoundError(AuthError):
     """No usable Amazon cookies could be found in a Firefox profile."""
 
 
+class CookieReadError(AuthError):
+    """A cookie file exists but could not be read or parsed."""
+
+
 class SessionExpiredError(AuthError):
     """The stored session was rejected by Amazon Photos."""
 

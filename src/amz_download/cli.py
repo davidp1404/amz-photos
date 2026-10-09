@@ -8,6 +8,7 @@ exit, so it is safe to run from a timer.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -15,8 +16,9 @@ import typer
 from rich.console import Console
 
 from . import auth
+from . import log as log_config
 from .client import AmazonPhotosClient, determine_tld
-from .errors import AmzError, NoCookiesFoundError, SessionExpiredError
+from .errors import AmzError, AuthError, NoCookiesFoundError, SessionExpiredError
 from .state import StateStore, default_state_path, status_report
 from .sync import RepairResult, SyncSummary, rebuild_state
 from .sync import sync as run_sync
@@ -34,10 +36,18 @@ app = typer.Typer(
 )
 console = Console()
 err_console = Console(stderr=True)
+logger = logging.getLogger(__name__)
 
 DestOption = typer.Option(Path("amz-library"), "--dest", "-d", help="Destination root.")
 CredsOption = typer.Option(
     None, "--credentials", help="Path to the stored session file."
+)
+VerboseOption = typer.Option(
+    0,
+    "--verbose",
+    "-v",
+    count=True,
+    help="Report what the run is doing. Repeat for request-level detail.",
 )
 
 
@@ -80,15 +90,35 @@ def _require_session(credentials: Path | None) -> dict[str, str]:
             "Re-authenticate with `amz-download login` before syncing."
         )
         raise typer.Exit(EXIT_AUTH)
+    logger.info("loaded session from %s", credentials or auth.credentials_path())
     return session
+
+
+def _load_cookies(cookie_file: Path | None, profile: Path | None) -> dict[str, str]:
+    """Read cookies from the source the user named, else from Firefox.
+
+    When no source is named and Firefox holds no Amazon cookies, `login`
+    prompts for a cookie file while a terminal is attached; otherwise the
+    error is re-raised for the caller to report.
+    """
+    try:
+        if cookie_file is not None:
+            return auth.read_cookie_file(cookie_file)
+        return auth.extract_firefox_cookies(profile)
+    except NoCookiesFoundError:
+        if cookie_file is None and sys.stdin.isatty():
+            prompted = Path(typer.prompt("Path to cookie file")).expanduser()
+            return auth.read_cookie_file(prompted)
+        raise
 
 
 # --- commands ----------------------------------------------------------------
 
 
 @app.command()
-def version() -> None:
+def version(verbose: int = VerboseOption) -> None:
     """Print the installed version."""
+    log_config.configure(verbose)
     from . import __version__
 
     typer.echo(__version__)
@@ -106,23 +136,16 @@ def login(
         None, "--profile", help="Explicit Firefox profile directory or cookies.sqlite."
     ),
     credentials: Path = CredsOption,
+    verbose: int = VerboseOption,
 ) -> None:
     """Capture an Amazon Photos session (interactive)."""
+    log_config.configure(verbose)
     try:
-        if cookie_file is not None:
-            cookies = auth.read_cookie_file(cookie_file)
-        else:
-            cookies = auth.extract_firefox_cookies(profile)
-    except NoCookiesFoundError as exc:
-        if cookie_file is None and sys.stdin.isatty():
-            cookie_file = Path(typer.prompt("Path to cookie file")).expanduser()
-            cookies = auth.read_cookie_file(cookie_file)
-        else:
-            err_console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(EXIT_AUTH)
-    try:
+        cookies = _load_cookies(cookie_file, profile)
         auth.validate_cookies(cookies)
-    except auth.MissingCookieError as exc:
+    except AuthError as exc:
+        # CookieReadError, NoCookiesFoundError, and MissingCookieError all mean
+        # the same thing to the user: supply a usable cookie file.
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(EXIT_AUTH)
 
@@ -131,12 +154,13 @@ def login(
 
 
 @app.command()
-def check(credentials: Path = CredsOption) -> None:
+def check(credentials: Path = CredsOption, verbose: int = VerboseOption) -> None:
     """Validate the stored session with a single request (no writes).
 
     Safe to call from timers and health checks: exit 0 when the session is
     accepted, 2 when it is missing or rejected, 3 on a network/other error.
     """
+    log_config.configure(verbose)
     session = _require_session(credentials)
     region = f"amazon.{determine_tld(session)}"
 
@@ -172,8 +196,11 @@ def sync(
         True, "--views/--no-views", help="Regenerate views after the run."
     ),
     credentials: Path = CredsOption,
+    verbose: int = VerboseOption,
 ) -> None:
     """Synchronize the local library with Amazon Photos (non-interactive)."""
+    log_config.configure(verbose)
+    logger.info("syncing into %s", dest)
     session = _require_session(credentials)
     store = StateStore(default_state_path(dest))
 
@@ -210,8 +237,10 @@ def sync(
 def views(
     dest: Path = DestOption,
     credentials: Path = CredsOption,
+    verbose: int = VerboseOption,
 ) -> None:
     """Regenerate the symlink views from recorded state (no network)."""
+    log_config.configure(verbose)
     store = StateStore(default_state_path(dest))
     if not store.path.exists():
         err_console.print(
@@ -236,8 +265,10 @@ def views(
 def status(
     dest: Path = DestOption,
     credentials: Path = CredsOption,
+    verbose: int = VerboseOption,
 ) -> None:
     """Report recorded library status (no network)."""
+    log_config.configure(verbose)
     store = StateStore(default_state_path(dest))
     report = status_report(store)
     store.close()
@@ -261,8 +292,10 @@ def repair(
     dest: Path = DestOption,
     concurrency: int = typer.Option(4, "--concurrency", "-c", min=1),
     credentials: Path = CredsOption,
+    verbose: int = VerboseOption,
 ) -> None:
     """Rebuild recorded state from the existing local library and a remote listing."""
+    log_config.configure(verbose)
     session = _require_session(credentials)
     store = StateStore(default_state_path(dest))
     store.initialize()

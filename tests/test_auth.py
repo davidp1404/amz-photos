@@ -13,6 +13,7 @@ import pytest
 
 from amz_download import auth
 from amz_download.errors import (
+    CookieReadError,
     MissingCookieError,
     NoCookiesFoundError,
     SessionExpiredError,
@@ -79,6 +80,31 @@ def test_missing_cookie_rejected_without_values():
     # No supplied secret value may appear in the message.
     assert SECRET_AT not in message
     assert SECRET_UBID not in message
+
+
+# --- 2.1b unreadable and unparseable cookie files ----------------------------
+
+
+def test_missing_cookie_file_reports_path_not_a_traceback(tmp_path):
+    missing = tmp_path / "absent.txt"
+    with pytest.raises(CookieReadError) as excinfo:
+        auth.read_cookie_file(missing)
+    assert "absent.txt" in str(excinfo.value)
+
+
+def test_unparseable_cookie_file_reports_path(tmp_path):
+    path = tmp_path / "cookies.json"
+    path.write_text("{not json at all")
+    with pytest.raises(CookieReadError) as excinfo:
+        auth.read_cookie_file(path)
+    assert "cookies.json" in str(excinfo.value)
+
+
+def test_binary_cookie_file_reports_path(tmp_path):
+    path = tmp_path / "cookies.bin"
+    path.write_bytes(b"\xff\xfe\x00binary")
+    with pytest.raises(CookieReadError):
+        auth.read_cookie_file(path)
 
 
 # --- 2.2 Firefox profile extraction -----------------------------------------

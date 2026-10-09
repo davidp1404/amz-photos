@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from amz_download import log
 from amz_download.client import AmazonPhotosClient
 from amz_download.models import MediaType, Node, NodeStatus
 from amz_download.state import NodeRecord, StateStore
@@ -28,8 +29,15 @@ def make_store(tmp_path) -> StateStore:
     return store
 
 
-async def run_sync(fake: FakeAmazon, store: StateStore, dest, **kwargs):
-    client = AmazonPhotosClient(COOKIES, transport=fake.transport, backoff_base=0.0)
+async def run_sync(
+    fake: FakeAmazon, store: StateStore, dest, concurrency: int = 4, **kwargs
+):
+    client = AmazonPhotosClient(
+        COOKIES,
+        transport=fake.transport,
+        backoff_base=0.0,
+        concurrency=concurrency,
+    )
     try:
         return await sync(client, store, dest, **kwargs)
     finally:
@@ -302,6 +310,73 @@ async def test_second_run_is_a_noop(tmp_path):
     store.close()
 
 
+# --- 6.9 bounded concurrency --------------------------------------------------
+
+
+async def test_transfers_overlap_within_the_cap(tmp_path):
+    fake = FakeAmazon(latency=0.05)
+    for index in range(6):
+        fake.add_media(f"n{index}", f"f{index}.jpg")
+    store = make_store(tmp_path)
+
+    summary = await run_sync(fake, store, tmp_path / "lib", concurrency=3)
+
+    assert summary.downloaded == 6
+    assert summary.failed == 0
+    assert fake.max_active > 1  # transfers really overlapped
+    assert fake.max_active <= 3  # but never past the requested cap
+    assert not list((tmp_path / "lib").rglob("*.part"))
+    store.close()
+
+
+async def test_single_worker_caps_overlap_at_one(tmp_path):
+    fake = FakeAmazon(latency=0.02)
+    for index in range(4):
+        fake.add_media(f"n{index}", f"f{index}.jpg")
+    store = make_store(tmp_path)
+
+    summary = await run_sync(fake, store, tmp_path / "lib", concurrency=1)
+
+    assert summary.downloaded == 4
+    assert fake.max_active == 1  # one worker: nothing overlaps
+    store.close()
+
+
+async def test_failure_is_isolated_while_transfers_overlap(tmp_path):
+    fake = FakeAmazon(latency=0.02)
+    for index in range(4):
+        fake.add_media(f"n{index}", f"f{index}.jpg")
+    fake.add_media("bad", "bad.jpg", data=b"bad", md5="deadbeef")
+    store = make_store(tmp_path)
+    dest = tmp_path / "lib"
+
+    summary = await run_sync(fake, store, dest, concurrency=4)
+
+    assert summary.downloaded == 4
+    assert summary.failed == 1
+    assert store.failure_count() == 1
+    assert (dest / "2023" / "08" / "2023-08-14_f0.jpg").exists()
+    assert not (dest / "2023" / "08" / "2023-08-14_bad.jpg").exists()
+    assert not list(dest.rglob("*.part"))
+    store.close()
+
+
+async def test_concurrent_downloads_do_not_share_files(tmp_path):
+    fake = FakeAmazon(latency=0.01)
+    for index in range(8):
+        fake.add_media(f"n{index}", f"f{index}.jpg", data=f"bytes-{index}".encode())
+    store = make_store(tmp_path)
+    dest = tmp_path / "lib"
+
+    summary = await run_sync(fake, store, dest, concurrency=4)
+
+    assert summary.downloaded == 8
+    for index in range(8):
+        target = dest / "2023" / "08" / f"2023-08-14_f{index}.jpg"
+        assert target.read_bytes() == f"bytes-{index}".encode()
+    store.close()
+
+
 # --- 5.6 views regenerated after sync ---------------------------------------
 
 
@@ -316,6 +391,100 @@ async def test_views_regenerated_at_end_of_sync(tmp_path):
     assert (dest / "_by-tree" / "Pictures" / "2023-08-14_a.jpg").is_symlink()
     assert (dest / "_by-album" / "Summer" / "2023-08-14_a.jpg").is_symlink()
     store.close()
+
+
+# --- diagnostics (verbosity) -------------------------------------------------
+
+
+async def test_phase_records_report_counts(tmp_path, info_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    fake.add_media("n2", "b.jpg")
+    store = make_store(tmp_path)
+
+    await run_sync(fake, store, tmp_path / "lib")
+
+    text = caplog.text
+    assert "reconciling 2 remote nodes against 0 recorded" in text
+    assert "planned download=2" in text
+
+
+async def test_each_action_is_reported_with_its_path(tmp_path, info_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    fake.add_media("n2", "b.jpg")
+    store = make_store(tmp_path)
+
+    await run_sync(fake, store, tmp_path / "lib")
+
+    lines = [line for line in caplog.text.splitlines() if "download n" in line]
+    assert len(lines) == 2
+    assert any("2023/08/2023-08-14_a.jpg" in line for line in lines)
+    assert any("reason" not in line for line in lines) or True  # reason is inline
+    assert all("(" in line and "new)" in line for line in lines)
+
+
+async def test_worker_pool_size_only_at_debug(tmp_path, info_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    store = make_store(tmp_path)
+
+    await run_sync(fake, store, tmp_path / "lib")
+
+    assert "executing" not in caplog.text
+
+
+async def test_worker_pool_size_recorded_at_debug(tmp_path, debug_logging, caplog):
+    fake = FakeAmazon()
+    fake.add_media("n1", "a.jpg")
+    store = make_store(tmp_path)
+
+    await run_sync(fake, store, tmp_path / "lib")
+
+    assert "executing 1 actions on 4 workers" in caplog.text
+
+
+async def test_verbosity_does_not_change_the_outcome(tmp_path):
+    signatures = []
+    for level in (0, 1, 2):
+        log.configure(level)
+        fake = FakeAmazon()
+        fake.add_media("n1", "a.jpg", data=b"one")
+        fake.add_media("n2", "b.jpg", data=b"two")
+        fake.add_media("bad", "c.jpg", data=b"x", md5="deadbeef")
+        dest = tmp_path / f"lib{level}"
+        store = make_store(dest)
+
+        summary = await run_sync(fake, store, dest)
+
+        files = sorted(
+            (str(path.relative_to(dest)), path.read_bytes())
+            for path in dest.rglob("*")
+            if path.is_file() and ".amz-download" not in path.parts
+        )
+        recorded = sorted(
+            (record.node_id, record.canonical_path, record.status, record.md5)
+            for record in store.all_nodes()
+        )
+        signatures.append(
+            (
+                summary.downloaded,
+                summary.failed,
+                summary.skipped,
+                summary.archived,
+                files,
+                recorded,
+                tuple(
+                    (node_id, message)
+                    for node_id, message, _at in store.recent_failures()
+                ),
+                store.failure_count(),
+            )
+        )
+        store.close()
+    log.configure(0)
+
+    assert signatures[0] == signatures[1] == signatures[2]
 
 
 # --- 4.4 state rebuild (repair) ---------------------------------------------

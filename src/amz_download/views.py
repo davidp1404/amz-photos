@@ -7,6 +7,7 @@ symlink failure degrades gracefully without touching canonical media.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,8 @@ from typing import Callable
 from .models import NodeStatus
 from .paths import sanitize_component, sanitize_tree_path
 from .state import StateStore
+
+logger = logging.getLogger(__name__)
 
 BY_TREE_DIR = "_by-tree"
 BY_ALBUM_DIR = "_by-album"
@@ -89,11 +92,13 @@ def generate_views(
             relative_target = os.path.relpath(target, link.parent)
             if link.is_symlink():
                 if os.readlink(link) == relative_target:
+                    logger.debug("unchanged link %s", link)
                     result.links += 1
                     continue
                 link.unlink()
                 os.symlink(relative_target, link)
                 result.updated += 1
+                logger.debug("updated link %s", link)
             elif link.exists():
                 message = f"refusing to replace non-symlink at {link}"
                 result.warnings.append(message)
@@ -102,12 +107,14 @@ def generate_views(
             else:
                 os.symlink(relative_target, link)
                 result.created += 1
+                logger.debug("created link %s", link)
             result.links += 1
         except OSError as exc:
             result.skipped = True
             message = f"views skipped: symbolic links are unavailable ({exc})"
             result.warnings.append(message)
             emit(message)
+            logger.warning("skipping views: %s", exc)
             return result
 
     _prune(dest / BY_TREE_DIR, desired, result)
@@ -123,6 +130,7 @@ def _prune(view_root: Path, desired: dict[Path, Path], result: ViewResult) -> No
             try:
                 path.unlink()
                 result.removed += 1
+                logger.debug("removed link %s", path)
             except OSError:
                 continue
     for path in sorted(

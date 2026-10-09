@@ -7,6 +7,7 @@ membership, run summaries, and failures.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Iterable
 
 from .models import Album, MediaType, Node, NodeStatus
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -196,6 +199,7 @@ class StateStore:
     # --- nodes ---------------------------------------------------------------
 
     def upsert_node(self, record: NodeRecord) -> None:
+        logger.debug("upserting node %s at %s", record.node_id, record.canonical_path)
         conn = self._connect()
         with conn:
             conn.execute(
